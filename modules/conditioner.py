@@ -4,6 +4,7 @@ from transformers import (
     AutoProcessor,
     Qwen2VLForConditionalGeneration,
     Qwen2_5_VLForConditionalGeneration,
+    BitsAndBytesConfig
 )
 from torchvision.transforms import ToPILImage
 
@@ -70,10 +71,12 @@ class Qwen25VL_7b_Embedder(torch.nn.Module):
         self.dtype = dtype
         self.device = device
 
+        bnb_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16)
         self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
             model_path,
             torch_dtype=dtype,
             attn_implementation="flash_attention_2",
+            quantization_config=bnb_config,
         ).to(torch.cuda.current_device())
 
         self.model.requires_grad_(False)
