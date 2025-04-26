@@ -13,13 +13,17 @@ from einops import rearrange, repeat
 from PIL import Image, ImageOps
 from safetensors.torch import load_file
 from torchvision.transforms import functional as F
-from tqdm import tqdm 
+from tqdm import tqdm
 
 import sampling
 from modules.autoencoder import AutoEncoder
 from modules.conditioner import Qwen25VL_7b_Embedder as Qwen2VLEmbedder
 from modules.model_edit import Step1XParams, Step1XEdit
 
+
+def cudagc():
+    torch.cuda.empty_cache()
+    torch.cuda.ipc_collect()
 
 def load_state_dict(model, ckpt_path, device="cuda", strict=False, assign=True):
     if Path(ckpt_path).suffix == ".safetensors":
@@ -85,13 +89,9 @@ def load_models(
         )
         dit = Step1XEdit(step1x_params)
 
-    ae = load_state_dict(ae, ae_path)
-    dit = load_state_dict(
-        dit, dit_path
-    )
+    ae = load_state_dict(ae, ae_path, "cpu")
+    dit = load_state_dict(dit, dit_path, "cpu").to(torch.float8_e4m3fn)
 
-    dit = dit.to(device=device, dtype=dtype)
-    ae = ae.to(device=device, dtype=torch.float32)
 
     return ae, dit, qwen2vl_encoder
 
@@ -147,6 +147,7 @@ class ImageGenerator:
         if isinstance(prompt, str):
             prompt = [prompt]
 
+        self.llm_encoder.cuda()
         txt, mask = self.llm_encoder(prompt, ref_image_raw)
 
         txt_ids = torch.zeros(bs, txt.shape[1], 3)
@@ -154,7 +155,8 @@ class ImageGenerator:
         img = torch.cat([img, ref_img.to(device=img.device, dtype=img.dtype)], dim=-2)
         img_ids = torch.cat([img_ids, ref_img_ids], dim=-2)
 
-
+        self.llm_encoder.cpu()
+        cudagc()
         return {
             "img": img,
             "mask": mask,
@@ -186,6 +188,7 @@ class ImageGenerator:
         show_progress=False,
         timesteps_truncate=1.0,
     ):
+        self.dit.cuda()
         if show_progress:
             pbar = tqdm(itertools.pairwise(timesteps), desc='denoising...')
         else:
@@ -198,7 +201,6 @@ class ImageGenerator:
             )
 
             txt, vec = self.dit.connector(llm_embedding, t_vec, mask)
-
 
             pred = self.dit(
                 img=img,
@@ -231,7 +233,9 @@ class ImageGenerator:
                 ], dim=1
             )
 
-        return img[:, :img.shape[1] // 2]
+        self.dit.cpu()
+        cudagc()
+        return img[:, : img.shape[1] // 2]
 
     @staticmethod
     def unpack(x: torch.Tensor, height: int, width: int) -> torch.Tensor:
@@ -268,7 +272,7 @@ class ImageGenerator:
     def output_process_image(self, resize_img, image_size):
         res_image = resize_img.resize(image_size)
         return res_image
-    
+
     def input_process_image(self, img, img_size=512):
         # 1. 打开图片
         w, h = img.size
@@ -287,6 +291,7 @@ class ImageGenerator:
         return img_resized, img.size
 
     @torch.inference_mode()
+    @torch.autocast(device_type="cuda", dtype=torch.bfloat16)
     def generate_image(
         self,
         prompt,
@@ -303,13 +308,14 @@ class ImageGenerator:
     ):
         assert num_samples == 1, "num_samples > 1 is not supported yet."
         ref_images_raw, img_info = self.input_process_image(ref_images, img_size=size_level)
-        
-        width, height = ref_images_raw.width, ref_images_raw.height
 
+        width, height = ref_images_raw.width, ref_images_raw.height
 
         ref_images_raw = self.load_image(ref_images_raw)
         ref_images_raw = ref_images_raw.to(self.device)
-        ref_images = self.ae.encode(ref_images_raw.to(self.device) * 2 - 1)
+        ref_images = self.ae.cuda().encode(ref_images_raw.to(self.device) * 2 - 1)
+        self.ae.cpu()
+        cudagc()
 
         seed = int(seed)
         seed = torch.Generator(device="cpu").seed() if seed < 0 else seed
@@ -321,7 +327,7 @@ class ImageGenerator:
             init_image = init_image.to(self.device)
             init_image = torch.nn.functional.interpolate(init_image, (height, width))
             init_image = self.ae.encode(init_image.to() * 2 - 1)
-        
+
         x = torch.randn(
             num_samples,
             16,
@@ -355,10 +361,13 @@ class ImageGenerator:
             timesteps_truncate=1.0,
         )
         x = self.unpack(x.float(), height, width)
-        with torch.autocast(device_type=self.device.type, dtype=torch.bfloat16):
-            x = self.ae.decode(x)
-            x = x.clamp(-1, 1)
-            x = x.mul(0.5).add(0.5)
+
+        self.ae.cuda()
+        x = self.ae.decode(x)
+        self.ae.cpu()
+        cudagc()
+        x = x.clamp(-1, 1)
+        x = x.mul(0.5).add(0.5)
 
         t1 = time.perf_counter()
         print(f"Done in {t1 - t0:.1f}s.")
@@ -389,7 +398,7 @@ def main():
 
     image_edit = ImageGenerator(
         ae_path=os.path.join(args.model_path, 'vae.safetensors'),
-        dit_path=os.path.join(args.model_path, "step1x-edit-i1258.safetensors"),
+        dit_path=os.path.join(args.model_path, "step1x-edit-i1258-FP8.safetensors"),
         qwen2vl_model_path='Qwen/Qwen2.5-VL-7B-Instruct',
         max_length=640,
     )
