@@ -65,18 +65,18 @@ def split_string(s):
 
 
 class Qwen25VL_7b_Embedder(torch.nn.Module):
-    def __init__(self, model_path, max_length=640, dtype=torch.bfloat16, device="cuda"):
+    def __init__(self, model_path, max_length=640, dtype=torch.bfloat16, device="cuda", bnb4bit=False):
         super(Qwen25VL_7b_Embedder, self).__init__()
         self.max_length = max_length
         self.dtype = dtype
         self.device = device
 
-        bnb_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16)
+        quant_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16) if bnb4bit else None
         self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
             model_path,
             torch_dtype=dtype,
             attn_implementation="flash_attention_2",
-            quantization_config=bnb_config,
+            quantization_config=quant_config,
         ).to(torch.cuda.current_device())
 
         self.model.requires_grad_(False)

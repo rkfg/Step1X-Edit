@@ -52,12 +52,14 @@ def load_models(
     device="cuda",
     max_length=256,
     dtype=torch.bfloat16,
+    bnb4bit=False
 ):
     qwen2vl_encoder = Qwen2VLEmbedder(
         qwen2vl_model_path,
         device=device,
         max_length=max_length,
         dtype=dtype,
+        bnb4bit=bnb4bit
     )
 
     with torch.device("meta"):
@@ -105,6 +107,7 @@ class ImageGenerator:
         device="cuda",
         max_length=640,
         dtype=torch.bfloat16,
+        bnb4bit=False
     ) -> None:
         self.device = torch.device(device)
         self.ae, self.dit, self.llm_encoder = load_models(
@@ -113,6 +116,7 @@ class ImageGenerator:
             qwen2vl_model_path=qwen2vl_model_path,
             max_length=max_length,
             dtype=dtype,
+            bnb4bit=bnb4bit
         )
 
     def prepare(self, prompt, img, ref_image, ref_image_raw):
@@ -388,6 +392,7 @@ def main():
     parser.add_argument('--num_steps', type=int, default=28, help='Number of diffusion steps')
     parser.add_argument('--cfg_guidance', type=float, default=6.0, help='CFG guidance strength')
     parser.add_argument('--size_level', default=512, type=int)
+    parser.add_argument("--bnb4bit", action='store_true', help='Use 4-bit quantization for VLM model')
     args = parser.parse_args()
 
     assert os.path.exists(args.input_dir), f"Input directory {args.input_dir} does not exist."
@@ -401,6 +406,7 @@ def main():
         dit_path=os.path.join(args.model_path, "step1x-edit-i1258-FP8.safetensors"),
         qwen2vl_model_path='Qwen/Qwen2.5-VL-7B-Instruct',
         max_length=640,
+        bnb4bit=args.bnb4bit
     )
 
     for image_name, prompt in image_and_prompts.items():
