@@ -106,3 +106,6 @@ We would like to express our sincere thanks to the contributors of [SD3](https:/
 
 ## 6. Disclaimer
 The results produced by this image editing model are entirely determined by user input and actions. The development team and this open-source project are not responsible for any outcomes or consequences arising from its use.
+
+## 7. LICENSE
+Step1X-Edit is licensed under the Apache License 2.0. You can find the license files in the respective github and  HuggingFace repositories.
